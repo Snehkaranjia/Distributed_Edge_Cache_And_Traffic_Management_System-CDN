@@ -1,0 +1,82 @@
+services:
+  origin:
+    build: .
+    container_name: origin
+    command: python origin/app.py
+    environment:
+      ORIGIN_FETCH_DELAY_SECONDS: "2"
+    ports:
+      - "5000:5000"
+
+  edge_us:
+    build: .
+    container_name: edge_us
+    command: python edge/app.py
+    environment:
+      EDGE_NAME: edge_us
+      EDGE_REGION: us
+      ORIGIN_URL: http://origin:5000
+      CACHE_HIT_DELAY_SECONDS: "0.1"
+    ports:
+      - "5001:5000"
+    depends_on:
+      - origin
+
+  edge_eu:
+    build: .
+    container_name: edge_eu
+    command: python edge/app.py
+    environment:
+      EDGE_NAME: edge_eu
+      EDGE_REGION: eu
+      ORIGIN_URL: http://origin:5000
+      CACHE_HIT_DELAY_SECONDS: "0.1"
+    ports:
+      - "5002:5000"
+    depends_on:
+      - origin
+
+  edge_asia:
+    build: .
+    container_name: edge_asia
+    command: python edge/app.py
+    environment:
+      EDGE_NAME: edge_asia
+      EDGE_REGION: asia
+      ORIGIN_URL: http://origin:5000
+      CACHE_HIT_DELAY_SECONDS: "0.1"
+    ports:
+      - "5003:5000"
+    depends_on:
+      - origin
+
+  traffic_manager:
+    build: .
+    container_name: traffic_manager
+    command: python traffic_manager/app.py
+    environment:
+      EDGE_US_URL: http://edge_us:5000
+      EDGE_EU_URL: http://edge_eu:5000
+      EDGE_ASIA_URL: http://edge_asia:5000
+      MAX_IN_FLIGHT: "20"
+    ports:
+      - "5004:5000"
+    depends_on:
+      - edge_us
+      - edge_eu
+      - edge_asia
+
+  purge_service:
+    build: .
+    container_name: purge_service
+    command: python purge_service/app.py
+    environment:
+      EDGE_US_URL: http://edge_us:5000
+      EDGE_EU_URL: http://edge_eu:5000
+      EDGE_ASIA_URL: http://edge_asia:5000
+    ports:
+      - "5005:5000"
+    depends_on:
+      - edge_us
+      - edge_eu
+      - edge_asia
