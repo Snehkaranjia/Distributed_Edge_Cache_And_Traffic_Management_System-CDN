@@ -1,4 +1,4 @@
-﻿# Distributed Edge Cache & Traffic Management (CDN Simulation)
+# Distributed Edge Cache & Traffic Management (CDN Simulation)
 
 This project simulates a mini CDN with 6 services:
 
