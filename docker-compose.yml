@@ -17,6 +17,7 @@ services:
       EDGE_REGION: us
       ORIGIN_URL: http://origin:5000
       CACHE_HIT_DELAY_SECONDS: "0.1"
+      CACHE_TTL_SECONDS: "600"
     ports:
       - "5001:5000"
     depends_on:
@@ -31,6 +32,7 @@ services:
       EDGE_REGION: eu
       ORIGIN_URL: http://origin:5000
       CACHE_HIT_DELAY_SECONDS: "0.1"
+      CACHE_TTL_SECONDS: "600"
     ports:
       - "5002:5000"
     depends_on:
@@ -45,6 +47,7 @@ services:
       EDGE_REGION: asia
       ORIGIN_URL: http://origin:5000
       CACHE_HIT_DELAY_SECONDS: "0.1"
+      CACHE_TTL_SECONDS: "600"
     ports:
       - "5003:5000"
     depends_on:

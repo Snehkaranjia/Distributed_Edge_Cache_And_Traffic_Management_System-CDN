@@ -1,10 +1,17 @@
+import logging
 import os
 import time
 from datetime import datetime, timezone
 
-from flask import Flask, jsonify, render_template_string, request
+from flask import Flask, jsonify, request
 
 app = Flask(__name__)
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)s | origin | %(message)s",
+)
+logger = logging.getLogger("origin")
 
 ORIGIN_FETCH_DELAY_SECONDS = float(os.getenv("ORIGIN_FETCH_DELAY_SECONDS", "2.0"))
 
@@ -24,93 +31,34 @@ content_store = {
 }
 
 
+@app.before_request
+def log_request_start():
+    logger.info(
+        "request_start method=%s path=%s remote=%s",
+        request.method,
+        request.path,
+        request.remote_addr,
+    )
+
+
+@app.after_request
+def log_request_end(response):
+    logger.info(
+        "request_end method=%s path=%s status=%s",
+        request.method,
+        request.path,
+        response.status_code,
+    )
+    return response
+
+
 @app.get("/")
-def ui():
-    return render_template_string(
-        """
-<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Origin Server UI</title>
-  <style>
-    :root { --bg:#f4f7fb; --card:#ffffff; --txt:#102a43; --accent:#0f766e; --muted:#486581; }
-    body { margin:0; font-family:Segoe UI,Tahoma,sans-serif; background:var(--bg); color:var(--txt); }
-    .wrap { max-width:960px; margin:24px auto; padding:0 16px; }
-    .card { background:var(--card); border-radius:12px; padding:16px; margin-bottom:16px; box-shadow:0 8px 24px rgba(16,42,67,.08); }
-    h1, h2 { margin:0 0 10px; }
-    .muted { color:var(--muted); }
-    input, textarea, button { width:100%; margin-top:8px; padding:10px; border-radius:8px; border:1px solid #cbd2d9; box-sizing:border-box; }
-    button { background:var(--accent); color:#fff; border:none; cursor:pointer; }
-    .row { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
-    pre { background:#0b1f33; color:#d9e2ec; padding:12px; border-radius:8px; overflow:auto; }
-    a { color:var(--accent); }
-  </style>
-</head>
-<body>
-  <div class="wrap">
-    <div class="card">
-      <h1>Origin Server</h1>
-      <div class="muted">Port 5000 | Source of truth for all content.</div>
-      <div style="margin-top:8px;">Other UIs: <a href="http://localhost:5001" target="_blank">Edge US</a> | <a href="http://localhost:5002" target="_blank">Edge EU</a> | <a href="http://localhost:5003" target="_blank">Edge Asia</a> | <a href="http://localhost:5004" target="_blank">Traffic Manager</a> | <a href="http://localhost:5005" target="_blank">Purge Service</a></div>
-    </div>
-
-    <div class="card row">
-      <div>
-        <h2>Fetch Content</h2>
-        <input id="getKey" value="index" placeholder="content key" />
-        <button onclick="getContent()">GET /content/&lt;key&gt;</button>
-      </div>
-      <div>
-        <h2>List Keys</h2>
-        <button onclick="listKeys()">GET /content</button>
-      </div>
-    </div>
-
-    <div class="card">
-      <h2>Update Content</h2>
-      <input id="putKey" value="index" placeholder="content key" />
-      <textarea id="putVal" rows="4">Updated content from Origin UI</textarea>
-      <button onclick="updateContent()">PUT /content/&lt;key&gt;</button>
-      <div class="muted" style="margin-top:8px;">After update, purge edge caches using Purge Service UI.</div>
-    </div>
-
-    <div class="card">
-      <h2>Result</h2>
-      <pre id="out">Ready</pre>
-    </div>
-  </div>
-
-<script>
-const out = document.getElementById('out');
-const pretty = (obj) => JSON.stringify(obj, null, 2);
-
-async function listKeys() {
-  const r = await fetch('/content');
-  out.textContent = pretty(await r.json());
-}
-
-async function getContent() {
-  const key = document.getElementById('getKey').value.trim();
-  const r = await fetch(`/content/${encodeURIComponent(key)}`);
-  out.textContent = pretty(await r.json());
-}
-
-async function updateContent() {
-  const key = document.getElementById('putKey').value.trim();
-  const content = document.getElementById('putVal').value;
-  const r = await fetch(`/content/${encodeURIComponent(key)}`, {
-    method: 'PUT',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({content})
-  });
-  out.textContent = pretty(await r.json());
-}
-</script>
-</body>
-</html>
-        """
+def root():
+    return jsonify(
+        {
+            "service": "origin",
+            "message": "Origin API is running. Use /content or /content/<key>.",
+        }
     )
 
 
@@ -121,6 +69,7 @@ def health():
 
 @app.get("/content")
 def list_content():
+    logger.info("list_content keys=%s", len(content_store))
     return jsonify({"keys": sorted(content_store.keys()), "count": len(content_store)})
 
 
@@ -128,9 +77,12 @@ def list_content():
 def get_content(key: str):
     item = content_store.get(key)
     if not item:
+        logger.warning("content_not_found key=%s", key)
         return jsonify({"error": f"key '{key}' not found"}), 404
 
+    logger.info("origin_fetch_start key=%s delay_seconds=%.2f", key, ORIGIN_FETCH_DELAY_SECONDS)
     time.sleep(ORIGIN_FETCH_DELAY_SECONDS)
+    logger.info("origin_fetch_end key=%s version=%s", key, item["version"])
 
     return jsonify(
         {
@@ -148,10 +100,17 @@ def update_content(key: str):
     payload = request.get_json(silent=True) or {}
     new_content = payload.get("content")
     if not isinstance(new_content, str) or not new_content.strip():
+        logger.warning("update_rejected key=%s reason=invalid_content", key)
         return jsonify({"error": "Provide non-empty JSON field: content"}), 400
 
     version = datetime.now(timezone.utc).isoformat()
     content_store[key] = {"content": new_content, "version": version}
+    logger.info(
+        "content_updated key=%s version=%s content_length=%s",
+        key,
+        version,
+        len(new_content),
+    )
 
     return jsonify(
         {

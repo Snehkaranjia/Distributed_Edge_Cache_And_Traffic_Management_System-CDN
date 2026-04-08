@@ -15,6 +15,7 @@ Client -> Traffic Manager -> Edge Node -> Origin (on cache miss)
 
 - Cache miss path simulates slower origin fetch (`2s`)
 - Cache hit path simulates fast edge response (`0.1s`)
+- Edge cache TTL is `600s` (10 minutes)
 - If one edge is down, traffic manager fails over to next healthy edge
 
 ## Run on Single Device (Docker Compose)
@@ -29,24 +30,29 @@ Prerequisites:
 docker compose up --build -d
 ```
 
-### 2) Open browser dashboards
+### 2) Open the client UI
 
-- Origin UI: `http://localhost:5000`
-- Edge US UI: `http://localhost:5001`
-- Edge EU UI: `http://localhost:5002`
-- Edge Asia UI: `http://localhost:5003`
-- Traffic Manager UI: `http://localhost:5004`
-- Purge Service UI: `http://localhost:5005`
+- Client UI (served by traffic manager): `http://localhost:5004`
 
-All UIs are interactive and include forms/buttons for service operations.
+Only one UI is provided for the client. Other services are API-only and log all activity to server console.
 
-### 3) Demo flow from UI
+### 3) Demo flow from client UI + APIs
 
-1. Open Traffic Manager UI (`5004`) and fetch key `index` with region `asia`.
-2. Fetch same key again from Traffic Manager UI and compare response (`cache_hit` becomes true in edge data).
-3. Open Origin UI (`5000`) and update `index` content.
-4. Open Purge Service UI (`5005`) and purge key `index`.
-5. Fetch `index` again from Traffic Manager UI to verify fresh content is pulled.
+1. Open client UI (`5004`) and fetch key `index` with region `asia`.
+2. Fetch same key again and verify `cache_hit: true` in response payload.
+3. Update origin content by API:
+
+```bash
+curl -X PUT http://localhost:5000/content/index -H "Content-Type: application/json" -d '{"content":"new content"}'
+```
+
+4. Purge key from all edges:
+
+```bash
+curl -X POST http://localhost:5005/purge -H "Content-Type: application/json" -d '{"key":"index"}'
+```
+
+5. Fetch `index` again from client UI and verify fresh origin-backed response is returned and re-cached.
 
 ### 4) Optional CLI checks
 
@@ -64,7 +70,7 @@ Stop one edge:
 docker stop edge_asia
 ```
 
-Then fetch `region=asia` from Traffic Manager UI (`5004`). It should route to another healthy edge.
+Then fetch `region=asia` from client UI (`5004`). It should route to another healthy edge.
 
 Restart:
 
@@ -100,6 +106,7 @@ Edge laptops:
   - `EDGE_NAME=edge_us` / `edge_eu` / `edge_asia`
   - `EDGE_REGION=us` / `eu` / `asia`
   - `ORIGIN_URL=http://<CONTROL_IP>:5000`
+  - Optional for multi-origin failover: `ORIGIN_URLS=http://<ORIGIN1_IP>:5000,http://<ORIGIN2_IP>:5000`
 
 Control node traffic manager must point to remote edges:
 - `EDGE_US_URL=http://<EDGE_US_IP>:5000`

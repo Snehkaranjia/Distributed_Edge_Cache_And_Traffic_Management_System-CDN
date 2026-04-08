@@ -1,9 +1,16 @@
+import logging
 import os
 
 import requests
-from flask import Flask, jsonify, render_template_string, request
+from flask import Flask, jsonify, request
 
 app = Flask(__name__)
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)s | purge_service | %(message)s",
+)
+logger = logging.getLogger("purge_service")
 
 REQUEST_TIMEOUT_SECONDS = float(os.getenv("REQUEST_TIMEOUT_SECONDS", "3"))
 
@@ -14,83 +21,30 @@ EDGES = {
 }
 
 
-@app.get("/")
-def ui():
-    return render_template_string(
-        """
-<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Purge Service UI</title>
-  <style>
-    :root { --bg:#f2f5fb; --card:#ffffff; --txt:#1f2f4d; --accent:#2b6cb0; --muted:#5a6f96; }
-    body { margin:0; font-family:Segoe UI,Tahoma,sans-serif; background:var(--bg); color:var(--txt); }
-    .wrap { max-width:960px; margin:24px auto; padding:0 16px; }
-    .card { background:var(--card); border-radius:12px; padding:16px; margin-bottom:16px; box-shadow:0 8px 24px rgba(31,47,77,.08); }
-    h1, h2 { margin:0 0 10px; }
-    .muted { color:var(--muted); }
-    input, button { width:100%; margin-top:8px; padding:10px; border-radius:8px; border:1px solid #c7d2e5; box-sizing:border-box; }
-    button { background:var(--accent); color:#fff; border:none; cursor:pointer; }
-    .row { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
-    pre { background:#152338; color:#dbe8ff; padding:12px; border-radius:8px; overflow:auto; }
-    a { color:var(--accent); }
-  </style>
-</head>
-<body>
-  <div class="wrap">
-    <div class="card">
-      <h1>Purge Service</h1>
-      <div class="muted">Port 5005 | Broadcast cache invalidation to all edge nodes.</div>
-      <div style="margin-top:8px;">Service UIs: <a href="http://localhost:5000" target="_blank">Origin</a> | <a href="http://localhost:5001" target="_blank">Edge US</a> | <a href="http://localhost:5002" target="_blank">Edge EU</a> | <a href="http://localhost:5003" target="_blank">Edge Asia</a> | <a href="http://localhost:5004" target="_blank">Traffic Manager</a></div>
-    </div>
-
-    <div class="card row">
-      <div>
-        <h2>Purge Single Key</h2>
-        <input id="key" value="index" placeholder="content key" />
-        <button onclick="purgeKey()">POST /purge { key }</button>
-      </div>
-      <div>
-        <h2>Purge Everything</h2>
-        <button onclick="purgeAll()">POST /purge {}</button>
-      </div>
-    </div>
-
-    <div class="card">
-      <h2>Result</h2>
-      <pre id="out">Ready</pre>
-    </div>
-  </div>
-
-<script>
-const out = document.getElementById('out');
-const pretty = (obj) => JSON.stringify(obj, null, 2);
-
-async function purgeKey() {
-  const key = document.getElementById('key').value.trim();
-  const r = await fetch('/purge', {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({key})
-  });
-  out.textContent = pretty(await r.json());
-}
-
-async function purgeAll() {
-  const r = await fetch('/purge', {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({})
-  });
-  out.textContent = pretty(await r.json());
-}
-</script>
-</body>
-</html>
-        """
+@app.before_request
+def log_request_start():
+    logger.info(
+        "request_start method=%s path=%s remote=%s",
+        request.method,
+        request.path,
+        request.remote_addr,
     )
+
+
+@app.after_request
+def log_request_end(response):
+    logger.info(
+        "request_end method=%s path=%s status=%s",
+        request.method,
+        request.path,
+        response.status_code,
+    )
+    return response
+
+
+@app.get("/")
+def root():
+    return jsonify({"service": "purge_service", "message": "Purge API is running. Use POST /purge."})
 
 
 @app.get("/health")
@@ -102,12 +56,19 @@ def health():
 def purge():
     payload = request.get_json(silent=True) or {}
     key = payload.get("key")
+    logger.info("purge_broadcast_start key=%s", key)
 
     results = []
     for region, edge_url in EDGES.items():
         endpoint = f"{edge_url}/purge/{key}" if key else f"{edge_url}/purge"
         try:
             response = requests.delete(endpoint, timeout=REQUEST_TIMEOUT_SECONDS)
+            logger.info(
+                "purge_edge_result region=%s endpoint=%s status=%s",
+                region,
+                endpoint,
+                response.status_code,
+            )
             results.append(
                 {
                     "region": region,
@@ -117,6 +78,7 @@ def purge():
                 }
             )
         except requests.RequestException as exc:
+            logger.exception("purge_edge_failed region=%s endpoint=%s error=%s", region, endpoint, exc)
             results.append(
                 {
                     "region": region,
@@ -126,6 +88,7 @@ def purge():
                 }
             )
 
+    logger.info("purge_broadcast_end key=%s total_edges=%s", key, len(EDGES))
     return jsonify(
         {
             "message": "purge broadcast completed",

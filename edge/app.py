@@ -1,126 +1,94 @@
+import logging
 import os
 import threading
 import time
 
 import requests
-from flask import Flask, jsonify, render_template_string
+from flask import Flask, jsonify, request
 
 app = Flask(__name__)
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)s | edge | %(message)s",
+)
+logger = logging.getLogger("edge")
 
 EDGE_NAME = os.getenv("EDGE_NAME", "edge")
 EDGE_REGION = os.getenv("EDGE_REGION", "unknown")
 ORIGIN_URL = os.getenv("ORIGIN_URL", "http://origin:5000")
+ORIGIN_URLS = [u.strip() for u in os.getenv("ORIGIN_URLS", "").split(",") if u.strip()]
+if not ORIGIN_URLS:
+    ORIGIN_URLS = [ORIGIN_URL]
 CACHE_HIT_DELAY_SECONDS = float(os.getenv("CACHE_HIT_DELAY_SECONDS", "0.1"))
 REQUEST_TIMEOUT_SECONDS = float(os.getenv("REQUEST_TIMEOUT_SECONDS", "5"))
+CACHE_TTL_SECONDS = int(os.getenv("CACHE_TTL_SECONDS", "600"))
 
 cache = {}
 cache_lock = threading.Lock()
 
 
+def fetch_from_origin(key: str):
+    for origin_url in ORIGIN_URLS:
+        logger.info("origin_attempt key=%s edge=%s origin=%s", key, EDGE_NAME, origin_url)
+        try:
+            response = requests.get(
+                f"{origin_url}/content/{key}",
+                timeout=REQUEST_TIMEOUT_SECONDS,
+            )
+            return origin_url, response
+        except requests.RequestException as exc:
+            logger.warning("origin_attempt_failed key=%s edge=%s origin=%s error=%s", key, EDGE_NAME, origin_url, exc)
+
+    return None, None
+
+
+@app.before_request
+def log_request_start():
+    logger.info(
+        "request_start method=%s path=%s edge=%s region=%s remote=%s",
+        request.method,
+        request.path,
+        EDGE_NAME,
+        EDGE_REGION,
+        request.remote_addr,
+    )
+
+
+@app.after_request
+def log_request_end(response):
+    logger.info(
+        "request_end method=%s path=%s edge=%s status=%s",
+        request.method,
+        request.path,
+        EDGE_NAME,
+        response.status_code,
+    )
+    return response
+
+
 @app.get("/")
-def ui():
-    return render_template_string(
-        """
-<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Edge UI</title>
-  <style>
-    :root { --bg:#f3f9f4; --card:#ffffff; --txt:#1e3a2f; --accent:#2f855a; --muted:#466a57; }
-    body { margin:0; font-family:Segoe UI,Tahoma,sans-serif; background:var(--bg); color:var(--txt); }
-    .wrap { max-width:960px; margin:24px auto; padding:0 16px; }
-    .card { background:var(--card); border-radius:12px; padding:16px; margin-bottom:16px; box-shadow:0 8px 24px rgba(30,58,47,.08); }
-    h1, h2 { margin:0 0 10px; }
-    .muted { color:var(--muted); }
-    input, button { width:100%; margin-top:8px; padding:10px; border-radius:8px; border:1px solid #c8d8cc; box-sizing:border-box; }
-    button { background:var(--accent); color:#fff; border:none; cursor:pointer; }
-    .row { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
-    pre { background:#14281d; color:#d9f3e4; padding:12px; border-radius:8px; overflow:auto; }
-    a { color:var(--accent); }
-  </style>
-</head>
-<body>
-  <div class="wrap">
-    <div class="card">
-      <h1>{{ edge_name|e }} ({{ edge_region|e }})</h1>
-      <div class="muted">Edge cache node UI.</div>
-      <div style="margin-top:8px;">Open other services: <a href="http://localhost:5000" target="_blank">Origin</a> | <a href="http://localhost:5004" target="_blank">Traffic Manager</a> | <a href="http://localhost:5005" target="_blank">Purge Service</a></div>
-    </div>
-
-    <div class="card row">
-      <div>
-        <h2>Fetch Through This Edge</h2>
-        <input id="key" value="index" placeholder="content key" />
-        <button onclick="fetchKey()">GET /content/&lt;key&gt;</button>
-      </div>
-      <div>
-        <h2>Cache Metadata</h2>
-        <button onclick="showCache()">GET /cache</button>
-      </div>
-    </div>
-
-    <div class="card row">
-      <div>
-        <h2>Purge One Key</h2>
-        <input id="purgeKey" value="index" placeholder="key to purge" />
-        <button onclick="purgeOne()">DELETE /purge/&lt;key&gt;</button>
-      </div>
-      <div>
-        <h2>Purge All</h2>
-        <button onclick="purgeAll()">DELETE /purge</button>
-      </div>
-    </div>
-
-    <div class="card">
-      <h2>Result</h2>
-      <pre id="out">Ready</pre>
-    </div>
-  </div>
-
-<script>
-const out = document.getElementById('out');
-const pretty = (obj) => JSON.stringify(obj, null, 2);
-
-async function fetchKey() {
-  const key = document.getElementById('key').value.trim();
-  const r = await fetch(`/content/${encodeURIComponent(key)}`);
-  out.textContent = pretty(await r.json());
-}
-
-async function showCache() {
-  const r = await fetch('/cache');
-  out.textContent = pretty(await r.json());
-}
-
-async function purgeOne() {
-  const key = document.getElementById('purgeKey').value.trim();
-  const r = await fetch(`/purge/${encodeURIComponent(key)}`, {method: 'DELETE'});
-  out.textContent = pretty(await r.json());
-}
-
-async function purgeAll() {
-  const r = await fetch('/purge', {method: 'DELETE'});
-  out.textContent = pretty(await r.json());
-}
-</script>
-</body>
-</html>
-        """,
-        edge_name=EDGE_NAME,
-        edge_region=EDGE_REGION,
+def root():
+    return jsonify(
+        {
+            "service": EDGE_NAME,
+            "region": EDGE_REGION,
+            "message": "Edge API is running. Use /content/<key>.",
+        }
     )
 
 
 @app.get("/health")
 def health():
+    with cache_lock:
+        cached_keys = len(cache)
     return jsonify(
         {
             "status": "ok",
             "service": EDGE_NAME,
             "region": EDGE_REGION,
-            "cached_keys": len(cache),
+            "cached_keys": cached_keys,
+            "cache_ttl_seconds": CACHE_TTL_SECONDS,
         }
     )
 
@@ -129,47 +97,77 @@ def health():
 def cache_info():
     with cache_lock:
         keys = sorted(cache.keys())
+    logger.info("cache_info edge=%s key_count=%s", EDGE_NAME, len(keys))
     return jsonify({"edge": EDGE_NAME, "region": EDGE_REGION, "keys": keys, "count": len(keys)})
 
 
 @app.get("/content/<key>")
 def get_content(key: str):
+    now = time.time()
     with cache_lock:
         cached = cache.get(key)
 
     if cached:
-        time.sleep(CACHE_HIT_DELAY_SECONDS)
-        return jsonify(
-            {
-                "key": key,
-                "content": cached["content"],
-                "version": cached["version"],
-                "source": "edge_cache",
-                "edge": EDGE_NAME,
-                "region": EDGE_REGION,
-                "cache_hit": True,
-                "simulated_delay_seconds": CACHE_HIT_DELAY_SECONDS,
-            }
-        )
+        age_seconds = now - cached["cached_at"]
+        if age_seconds < CACHE_TTL_SECONDS:
+            logger.info(
+                "cache_hit key=%s edge=%s age_seconds=%.2f ttl_seconds=%s",
+                key,
+                EDGE_NAME,
+                age_seconds,
+                CACHE_TTL_SECONDS,
+            )
+            time.sleep(CACHE_HIT_DELAY_SECONDS)
+            return jsonify(
+                {
+                    "key": key,
+                    "content": cached["content"],
+                    "version": cached["version"],
+                    "source": "edge_cache",
+                    "edge": EDGE_NAME,
+                    "region": EDGE_REGION,
+                    "cache_hit": True,
+                    "cache_age_seconds": round(age_seconds, 3),
+                    "cache_ttl_seconds": CACHE_TTL_SECONDS,
+                    "simulated_delay_seconds": CACHE_HIT_DELAY_SECONDS,
+                }
+            )
 
-    try:
-        response = requests.get(
-            f"{ORIGIN_URL}/content/{key}",
-            timeout=REQUEST_TIMEOUT_SECONDS,
+        logger.info(
+            "cache_expired key=%s edge=%s age_seconds=%.2f ttl_seconds=%s",
+            key,
+            EDGE_NAME,
+            age_seconds,
+            CACHE_TTL_SECONDS,
         )
-    except requests.RequestException as exc:
-        return jsonify({"error": "origin_unreachable", "details": str(exc), "edge": EDGE_NAME}), 502
+        with cache_lock:
+            cache.pop(key, None)
+
+    logger.info("cache_miss key=%s edge=%s origins=%s", key, EDGE_NAME, ORIGIN_URLS)
+
+    used_origin, response = fetch_from_origin(key)
+    if response is None:
+        logger.error("all_origins_unreachable key=%s edge=%s", key, EDGE_NAME)
+        return jsonify({"error": "origin_unreachable", "details": "all configured origins failed", "edge": EDGE_NAME}), 502
 
     if response.status_code != 200:
-        return jsonify(response.json()), response.status_code
+        logger.warning("origin_error key=%s edge=%s origin=%s status=%s", key, EDGE_NAME, used_origin, response.status_code)
+        try:
+            payload = response.json()
+        except ValueError:
+            payload = {"error": "origin_bad_response", "status": response.status_code}
+        return jsonify(payload), response.status_code
 
     payload = response.json()
+    cached_at = time.time()
     with cache_lock:
         cache[key] = {
             "content": payload["content"],
             "version": payload["version"],
-            "cached_at": time.time(),
+            "cached_at": cached_at,
         }
+
+    logger.info("cache_store key=%s edge=%s version=%s", key, EDGE_NAME, payload["version"])
 
     return jsonify(
         {
@@ -180,7 +178,9 @@ def get_content(key: str):
             "edge": EDGE_NAME,
             "region": EDGE_REGION,
             "cache_hit": False,
-            "simulated_delay_seconds": payload.get("simulated_delay_seconds", None),
+            "cache_ttl_seconds": CACHE_TTL_SECONDS,
+            "origin_used": used_origin,
+            "simulated_delay_seconds": payload.get("simulated_delay_seconds"),
         }
     )
 
@@ -190,6 +190,7 @@ def purge_all():
     with cache_lock:
         purged_count = len(cache)
         cache.clear()
+    logger.info("purge_all edge=%s purged_count=%s", EDGE_NAME, purged_count)
     return jsonify({"edge": EDGE_NAME, "region": EDGE_REGION, "purged_all": purged_count})
 
 
@@ -199,6 +200,7 @@ def purge_key(key: str):
         existed = key in cache
         if existed:
             del cache[key]
+    logger.info("purge_key edge=%s key=%s purged=%s", EDGE_NAME, key, existed)
     return jsonify({"edge": EDGE_NAME, "region": EDGE_REGION, "key": key, "purged": existed})
 
 
