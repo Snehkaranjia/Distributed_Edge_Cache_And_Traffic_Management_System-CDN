@@ -13,11 +13,12 @@ logging.basicConfig(
 logger = logging.getLogger("purge_service")
 
 REQUEST_TIMEOUT_SECONDS = float(os.getenv("REQUEST_TIMEOUT_SECONDS", "3"))
+SERVICE_PORT = int(os.getenv("PORT", "5005"))
 
 _edge_env = {
     "us": os.getenv("EDGE_US_URL"),
     "eu": os.getenv("EDGE_EU_URL"),
-    "asia": os.getenv("EDGE_ASIA_URL"),
+    "asia": os.getenv("EDGE_ASIA_URL", "http://10.159.173.200:5000"),
 }
 
 # If any EDGE_*_URL is explicitly provided, only use the provided non-empty values.
@@ -30,6 +31,8 @@ else:
         "eu": "http://edge_eu:5000",
         "asia": "http://edge_asia:5000",
     }
+
+logger.info("purge_service_config edges=%s port=%s", EDGES, SERVICE_PORT)
 
 
 @app.before_request
@@ -113,4 +116,4 @@ def purge():
 
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000, debug=False)
+    app.run(host="0.0.0.0", port=SERVICE_PORT, debug=False)

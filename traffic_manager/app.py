@@ -1,6 +1,7 @@
 import logging
 import os
 import threading
+import uuid
 
 import requests
 from flask import Flask, jsonify, render_template, request
@@ -15,11 +16,12 @@ logger = logging.getLogger("traffic_manager")
 
 REQUEST_TIMEOUT_SECONDS = float(os.getenv("REQUEST_TIMEOUT_SECONDS", "3"))
 MAX_IN_FLIGHT = int(os.getenv("MAX_IN_FLIGHT", "20"))
+SERVICE_PORT = int(os.getenv("PORT", "5004"))
 
 _edge_env = {
     "us": os.getenv("EDGE_US_URL"),
     "eu": os.getenv("EDGE_EU_URL"),
-    "asia": os.getenv("EDGE_ASIA_URL"),
+    "asia": os.getenv("EDGE_ASIA_URL", "http://10.159.173.200:5000"),
 }
 
 # If any EDGE_*_URL is explicitly provided, only use the provided non-empty values.
@@ -32,6 +34,8 @@ else:
         "eu": "http://edge_eu:5000",
         "asia": "http://edge_asia:5000",
     }
+
+logger.info("traffic_manager_config edge_map=%s port=%s", EDGE_MAP, SERVICE_PORT)
 
 FALLBACK_ORDER = {
     "us": ["us", "eu", "asia"],
@@ -142,8 +146,21 @@ def fetch(key: str):
             edge_url,
         )
 
+        request_id = str(uuid.uuid4())
         response = requests.get(f"{edge_url}/content/{key}", timeout=REQUEST_TIMEOUT_SECONDS + 5)
         payload = response.json()
+        expected_friend_edge = EDGE_MAP.get("asia")
+        matched_expected_edge = (edge_url == expected_friend_edge) if expected_friend_edge else None
+
+        logger.info(
+            "fetch_proof request_id=%s selected_edge=%s expected_friend_edge=%s matched=%s edge_name=%s edge_host=%s",
+            request_id,
+            edge_url,
+            expected_friend_edge,
+            matched_expected_edge,
+            payload.get("edge"),
+            payload.get("edge_hostname"),
+        )
         logger.info(
             "edge_response key=%s routed_region=%s status=%s cache_hit=%s",
             key,
@@ -156,10 +173,18 @@ def fetch(key: str):
             jsonify(
                 {
                     "traffic_manager": "ok",
+                    "request_id": request_id,
                     "client_region": client_region,
                     "routed_region": chosen_region,
                     "edge_url": edge_url,
                     "upstream_status": response.status_code,
+                    "verification": {
+                        "expected_friend_edge_url": expected_friend_edge,
+                        "selected_edge_url": edge_url,
+                        "selected_edge_matches_friend_edge": matched_expected_edge,
+                        "edge_reported_name": payload.get("edge"),
+                        "edge_reported_hostname": payload.get("edge_hostname"),
+                    },
                     "data": payload,
                 }
             ),
@@ -175,4 +200,4 @@ def fetch(key: str):
 
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000, debug=False)
+    app.run(host="0.0.0.0", port=SERVICE_PORT, debug=False)

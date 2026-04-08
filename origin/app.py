@@ -14,6 +14,7 @@ logging.basicConfig(
 logger = logging.getLogger("origin")
 
 ORIGIN_FETCH_DELAY_SECONDS = float(os.getenv("ORIGIN_FETCH_DELAY_SECONDS", "2.0"))
+SERVICE_PORT = int(os.getenv("PORT", "5000"))
 
 content_store = {
     "index": {
@@ -123,4 +124,4 @@ def update_content(key: str):
 
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000, debug=False)
+    app.run(host="0.0.0.0", port=SERVICE_PORT, debug=False)
