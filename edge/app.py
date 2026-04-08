@@ -1,5 +1,6 @@
 import logging
 import os
+import socket
 import threading
 import time
 
@@ -14,15 +15,26 @@ logging.basicConfig(
 )
 logger = logging.getLogger("edge")
 
-EDGE_NAME = os.getenv("EDGE_NAME", "edge")
-EDGE_REGION = os.getenv("EDGE_REGION", "unknown")
-ORIGIN_URL = os.getenv("ORIGIN_URL", "http://origin:5000")
+EDGE_NAME = os.getenv("EDGE_NAME", "edge_friend")
+EDGE_REGION = os.getenv("EDGE_REGION", "asia")
+ORIGIN_URL = os.getenv("ORIGIN_URL", "http://10.159.173.150:5000")
 ORIGIN_URLS = [u.strip() for u in os.getenv("ORIGIN_URLS", "").split(",") if u.strip()]
 if not ORIGIN_URLS:
     ORIGIN_URLS = [ORIGIN_URL]
+EDGE_HOSTNAME = socket.gethostname()
 CACHE_HIT_DELAY_SECONDS = float(os.getenv("CACHE_HIT_DELAY_SECONDS", "0.1"))
 REQUEST_TIMEOUT_SECONDS = float(os.getenv("REQUEST_TIMEOUT_SECONDS", "5"))
 CACHE_TTL_SECONDS = int(os.getenv("CACHE_TTL_SECONDS", "600"))
+SERVICE_PORT = int(os.getenv("PORT", "5000"))
+
+logger.info(
+    "edge_config edge=%s region=%s host=%s origins=%s port=%s",
+    EDGE_NAME,
+    EDGE_REGION,
+    EDGE_HOSTNAME,
+    ORIGIN_URLS,
+    SERVICE_PORT,
+)
 
 cache = {}
 cache_lock = threading.Lock()
@@ -87,6 +99,8 @@ def health():
             "status": "ok",
             "service": EDGE_NAME,
             "region": EDGE_REGION,
+            "edge_hostname": EDGE_HOSTNAME,
+            "origin_urls": ORIGIN_URLS,
             "cached_keys": cached_keys,
             "cache_ttl_seconds": CACHE_TTL_SECONDS,
         }
@@ -111,6 +125,13 @@ def get_content(key: str):
         age_seconds = now - cached["cached_at"]
         if age_seconds < CACHE_TTL_SECONDS:
             logger.info(
+                "served_request key=%s source=edge_cache edge=%s host=%s client=%s",
+                key,
+                EDGE_NAME,
+                EDGE_HOSTNAME,
+                request.remote_addr,
+            )
+            logger.info(
                 "cache_hit key=%s edge=%s age_seconds=%.2f ttl_seconds=%s",
                 key,
                 EDGE_NAME,
@@ -126,6 +147,7 @@ def get_content(key: str):
                     "source": "edge_cache",
                     "edge": EDGE_NAME,
                     "region": EDGE_REGION,
+                    "edge_hostname": EDGE_HOSTNAME,
                     "cache_hit": True,
                     "cache_age_seconds": round(age_seconds, 3),
                     "cache_ttl_seconds": CACHE_TTL_SECONDS,
@@ -168,6 +190,14 @@ def get_content(key: str):
         }
 
     logger.info("cache_store key=%s edge=%s version=%s", key, EDGE_NAME, payload["version"])
+    logger.info(
+        "served_request key=%s source=origin_via_edge edge=%s host=%s client=%s origin=%s",
+        key,
+        EDGE_NAME,
+        EDGE_HOSTNAME,
+        request.remote_addr,
+        used_origin,
+    )
 
     return jsonify(
         {
@@ -177,6 +207,7 @@ def get_content(key: str):
             "source": "origin_via_edge",
             "edge": EDGE_NAME,
             "region": EDGE_REGION,
+            "edge_hostname": EDGE_HOSTNAME,
             "cache_hit": False,
             "cache_ttl_seconds": CACHE_TTL_SECONDS,
             "origin_used": used_origin,
@@ -205,4 +236,4 @@ def purge_key(key: str):
 
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000, debug=False)
+    app.run(host="0.0.0.0", port=SERVICE_PORT, debug=False)
