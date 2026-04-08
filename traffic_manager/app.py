@@ -16,11 +16,22 @@ logger = logging.getLogger("traffic_manager")
 REQUEST_TIMEOUT_SECONDS = float(os.getenv("REQUEST_TIMEOUT_SECONDS", "3"))
 MAX_IN_FLIGHT = int(os.getenv("MAX_IN_FLIGHT", "20"))
 
-EDGE_MAP = {
-    "us": os.getenv("EDGE_US_URL", "http://edge_us:5000"),
-    "eu": os.getenv("EDGE_EU_URL", "http://edge_eu:5000"),
-    "asia": os.getenv("EDGE_ASIA_URL", "http://edge_asia:5000"),
+_edge_env = {
+    "us": os.getenv("EDGE_US_URL"),
+    "eu": os.getenv("EDGE_EU_URL"),
+    "asia": os.getenv("EDGE_ASIA_URL"),
 }
+
+# If any EDGE_*_URL is explicitly provided, only use the provided non-empty values.
+# Otherwise, fall back to compose-friendly service names.
+if any(value is not None for value in _edge_env.values()):
+    EDGE_MAP = {region: value.strip() for region, value in _edge_env.items() if value and value.strip()}
+else:
+    EDGE_MAP = {
+        "us": "http://edge_us:5000",
+        "eu": "http://edge_eu:5000",
+        "asia": "http://edge_asia:5000",
+    }
 
 FALLBACK_ORDER = {
     "us": ["us", "eu", "asia"],
@@ -41,7 +52,13 @@ def is_edge_healthy(edge_url: str) -> bool:
 
 
 def pick_edge(client_region: str):
-    order = FALLBACK_ORDER.get(client_region, ["us", "eu", "asia"])
+    preferred_order = FALLBACK_ORDER.get(client_region, ["us", "eu", "asia"])
+    order = [region for region in preferred_order if region in EDGE_MAP]
+
+    for region in EDGE_MAP:
+        if region not in order:
+            order.append(region)
+
     for region in order:
         url = EDGE_MAP[region]
         if is_edge_healthy(url):
@@ -82,6 +99,9 @@ def health():
 
 @app.get("/edges")
 def edges():
+    if not EDGE_MAP:
+        return jsonify({"error": "no_edges_configured"}), 500
+
     result = {}
     for region, url in EDGE_MAP.items():
         healthy = is_edge_healthy(url)

@@ -14,11 +14,22 @@ logger = logging.getLogger("purge_service")
 
 REQUEST_TIMEOUT_SECONDS = float(os.getenv("REQUEST_TIMEOUT_SECONDS", "3"))
 
-EDGES = {
-    "us": os.getenv("EDGE_US_URL", "http://edge_us:5000"),
-    "eu": os.getenv("EDGE_EU_URL", "http://edge_eu:5000"),
-    "asia": os.getenv("EDGE_ASIA_URL", "http://edge_asia:5000"),
+_edge_env = {
+    "us": os.getenv("EDGE_US_URL"),
+    "eu": os.getenv("EDGE_EU_URL"),
+    "asia": os.getenv("EDGE_ASIA_URL"),
 }
+
+# If any EDGE_*_URL is explicitly provided, only use the provided non-empty values.
+# Otherwise, fall back to compose-friendly service names.
+if any(value is not None for value in _edge_env.values()):
+    EDGES = {region: value.strip() for region, value in _edge_env.items() if value and value.strip()}
+else:
+    EDGES = {
+        "us": "http://edge_us:5000",
+        "eu": "http://edge_eu:5000",
+        "asia": "http://edge_asia:5000",
+    }
 
 
 @app.before_request
@@ -54,6 +65,9 @@ def health():
 
 @app.post("/purge")
 def purge():
+    if not EDGES:
+        return jsonify({"error": "no_edges_configured"}), 500
+
     payload = request.get_json(silent=True) or {}
     key = payload.get("key")
     logger.info("purge_broadcast_start key=%s", key)

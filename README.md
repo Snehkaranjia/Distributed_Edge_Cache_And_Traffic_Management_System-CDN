@@ -113,6 +113,66 @@ Control node traffic manager must point to remote edges:
 - `EDGE_EU_URL=http://<EDGE_EU_IP>:5000`
 - `EDGE_ASIA_URL=http://<EDGE_ASIA_IP>:5000`
 
+## Run on 2 Laptops (1 Origin + 1 Edge)
+
+This is a simplified deployment where:
+- Your laptop runs: `origin`, `traffic_manager`, `purge_service`
+- Friend laptop runs: one `edge` service
+
+Assume:
+- Your laptop IP: `<YOUR_IP>` (example `192.168.1.10`)
+- Friend laptop IP: `<FRIEND_IP>` (example `192.168.1.20`)
+
+### On your laptop (control node)
+
+1. Start origin:
+
+```powershell
+python origin/app.py
+```
+
+2. In a second terminal, start traffic manager pointing to only one edge:
+
+```powershell
+$env:EDGE_ASIA_URL="http://<FRIEND_IP>:5000"
+python traffic_manager/app.py
+```
+
+3. In a third terminal, start purge service pointing to only one edge:
+
+```powershell
+$env:EDGE_ASIA_URL="http://<FRIEND_IP>:5000"
+python purge_service/app.py
+```
+
+4. Open client UI from your laptop:
+
+`http://localhost:5004`
+
+Use region `asia` in the UI for fastest direct routing to that single edge.
+
+### On friend laptop (edge node)
+
+```powershell
+$env:EDGE_NAME="edge_friend"
+$env:EDGE_REGION="asia"
+$env:ORIGIN_URL="http://<YOUR_IP>:5000"
+python edge/app.py
+```
+
+### Quick test
+
+From your laptop:
+
+```powershell
+curl "http://localhost:5004/fetch/index?region=asia"
+```
+
+Expected first response: `cache_hit: false` (origin fetch via edge)
+
+Run same command again:
+- expected `cache_hit: true` (served from edge cache)
+
 Purge service uses same edge URLs.
 
 ### Example (without compose, per device)
