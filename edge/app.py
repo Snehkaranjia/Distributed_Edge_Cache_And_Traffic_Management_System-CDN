@@ -17,7 +17,7 @@ logger = logging.getLogger("edge")
 
 EDGE_NAME = os.getenv("EDGE_NAME", "edge_friend")
 EDGE_REGION = os.getenv("EDGE_REGION", "asia")
-ORIGIN_URL = os.getenv("ORIGIN_URL", "http://172.18.128.1:5000")
+ORIGIN_URL = os.getenv("ORIGIN_URL", "http://10.159.173.150:5000")
 ORIGIN_URLS = [u.strip() for u in os.getenv("ORIGIN_URLS", "").split(",") if u.strip()]
 if not ORIGIN_URLS:
     ORIGIN_URLS = [ORIGIN_URL]
