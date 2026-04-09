@@ -3,7 +3,7 @@ import os
 import time
 from datetime import datetime, timezone
 
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, request, send_from_directory
 
 app = Flask(__name__)
 
@@ -14,6 +14,14 @@ logging.basicConfig(
 logger = logging.getLogger("origin")
 
 ORIGIN_FETCH_DELAY_SECONDS = float(os.getenv("ORIGIN_FETCH_DELAY_SECONDS", "2.0"))
+SERVICE_PORT = int(os.getenv("PORT", "5000"))
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+PUBLIC_DIR = os.path.join(BASE_DIR, "public")
+
+
+def ensure_public_directory():
+    os.makedirs(PUBLIC_DIR, exist_ok=True)
+    logger.info("public_directory_ready path=%s", PUBLIC_DIR)
 
 content_store = {
     "index": {
@@ -29,6 +37,8 @@ content_store = {
         "version": datetime.now(timezone.utc).isoformat(),
     },
 }
+
+ensure_public_directory()
 
 
 @app.before_request
@@ -71,6 +81,33 @@ def health():
 def list_content():
     logger.info("list_content keys=%s", len(content_store))
     return jsonify({"keys": sorted(content_store.keys()), "count": len(content_store)})
+
+
+@app.get("/public")
+def list_public_files():
+    files = []
+    for root, _, file_names in os.walk(PUBLIC_DIR):
+        for file_name in file_names:
+            full_path = os.path.join(root, file_name)
+            relative_path = os.path.relpath(full_path, PUBLIC_DIR).replace("\\", "/")
+            files.append(relative_path)
+
+    files.sort()
+    logger.info("list_public_files count=%s", len(files))
+    return jsonify({"count": len(files), "files": files})
+
+
+@app.get("/public/<path:filename>")
+def serve_public_file(filename: str):
+    full_path = os.path.abspath(os.path.join(PUBLIC_DIR, filename))
+    if not full_path.startswith(os.path.abspath(PUBLIC_DIR) + os.sep):
+        return jsonify({"error": "invalid_path"}), 400
+
+    if not os.path.exists(full_path):
+        return jsonify({"error": f"file '{filename}' not found"}), 404
+
+    logger.info("serve_public_file file=%s", filename)
+    return send_from_directory(PUBLIC_DIR, filename)
 
 
 @app.get("/content/<key>")
@@ -123,4 +160,4 @@ def update_content(key: str):
 
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000, debug=False)
+    app.run(host="0.0.0.0", port=SERVICE_PORT, debug=False)

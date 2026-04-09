@@ -1,10 +1,12 @@
 import logging
 import os
+import shutil
+import socket
 import threading
 import time
 
 import requests
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, request, send_from_directory
 
 app = Flask(__name__)
 
@@ -14,18 +16,92 @@ logging.basicConfig(
 )
 logger = logging.getLogger("edge")
 
-EDGE_NAME = os.getenv("EDGE_NAME", "edge")
-EDGE_REGION = os.getenv("EDGE_REGION", "unknown")
-ORIGIN_URL = os.getenv("ORIGIN_URL", "http://origin:5000")
+EDGE_NAME = os.getenv("EDGE_NAME", "edge_friend")
+EDGE_REGION = os.getenv("EDGE_REGION", "asia")
+ORIGIN_URL = os.getenv("ORIGIN_URL", "http://10.159.173.150:5000")
 ORIGIN_URLS = [u.strip() for u in os.getenv("ORIGIN_URLS", "").split(",") if u.strip()]
 if not ORIGIN_URLS:
     ORIGIN_URLS = [ORIGIN_URL]
+EDGE_HOSTNAME = socket.gethostname()
 CACHE_HIT_DELAY_SECONDS = float(os.getenv("CACHE_HIT_DELAY_SECONDS", "0.1"))
 REQUEST_TIMEOUT_SECONDS = float(os.getenv("REQUEST_TIMEOUT_SECONDS", "5"))
 CACHE_TTL_SECONDS = int(os.getenv("CACHE_TTL_SECONDS", "600"))
+SERVICE_PORT = int(os.getenv("PORT", "5000"))
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+LOCAL_PUBLIC_DIR = os.path.join(BASE_DIR, "public")
+ORIGIN_PUBLIC_DIR = os.path.abspath(os.path.join(BASE_DIR, "..", "origin", "public"))
+
+logger.info(
+    "edge_config edge=%s region=%s host=%s origins=%s port=%s",
+    EDGE_NAME,
+    EDGE_REGION,
+    EDGE_HOSTNAME,
+    ORIGIN_URLS,
+    SERVICE_PORT,
+)
 
 cache = {}
 cache_lock = threading.Lock()
+
+
+def ensure_directory(path: str):
+    os.makedirs(path, exist_ok=True)
+
+
+def copy_origin_public_to_edge_public() -> int:
+    ensure_directory(LOCAL_PUBLIC_DIR)
+    copied_files = 0
+
+    if not os.path.isdir(ORIGIN_PUBLIC_DIR):
+        logger.info("origin_public_missing path=%s", ORIGIN_PUBLIC_DIR)
+        return copied_files
+
+    for root, _, file_names in os.walk(ORIGIN_PUBLIC_DIR):
+        relative_root = os.path.relpath(root, ORIGIN_PUBLIC_DIR)
+        target_root = LOCAL_PUBLIC_DIR if relative_root == "." else os.path.join(LOCAL_PUBLIC_DIR, relative_root)
+        ensure_directory(target_root)
+
+        for file_name in file_names:
+            source_path = os.path.join(root, file_name)
+            target_path = os.path.join(target_root, file_name)
+            shutil.copy2(source_path, target_path)
+            copied_files += 1
+
+    logger.info("public_sync_complete edge=%s copied_files=%s", EDGE_NAME, copied_files)
+    return copied_files
+
+
+def fetch_public_file_from_origin(filename: str) -> bool:
+    for origin_url in ORIGIN_URLS:
+        file_url = f"{origin_url}/public/{filename}"
+        logger.info("origin_file_attempt file=%s edge=%s origin=%s", filename, EDGE_NAME, origin_url)
+        try:
+            response = requests.get(file_url, timeout=REQUEST_TIMEOUT_SECONDS)
+        except requests.RequestException as exc:
+            logger.warning("origin_file_attempt_failed file=%s edge=%s origin=%s error=%s", filename, EDGE_NAME, origin_url, exc)
+            continue
+
+        if response.status_code != 200:
+            logger.warning("origin_file_unavailable file=%s edge=%s origin=%s status=%s", filename, EDGE_NAME, origin_url, response.status_code)
+            continue
+
+        target_file_path = os.path.abspath(os.path.join(LOCAL_PUBLIC_DIR, filename))
+        public_root = os.path.abspath(LOCAL_PUBLIC_DIR)
+        if not target_file_path.startswith(public_root + os.sep):
+            logger.warning("invalid_file_path file=%s edge=%s", filename, EDGE_NAME)
+            return False
+
+        ensure_directory(os.path.dirname(target_file_path))
+        with open(target_file_path, "wb") as file_pointer:
+            file_pointer.write(response.content)
+
+        logger.info("origin_file_cached file=%s edge=%s origin=%s", filename, EDGE_NAME, origin_url)
+        return True
+
+    return False
+
+
+copy_origin_public_to_edge_public()
 
 
 def fetch_from_origin(key: str):
@@ -87,6 +163,8 @@ def health():
             "status": "ok",
             "service": EDGE_NAME,
             "region": EDGE_REGION,
+            "edge_hostname": EDGE_HOSTNAME,
+            "origin_urls": ORIGIN_URLS,
             "cached_keys": cached_keys,
             "cache_ttl_seconds": CACHE_TTL_SECONDS,
         }
@@ -101,6 +179,49 @@ def cache_info():
     return jsonify({"edge": EDGE_NAME, "region": EDGE_REGION, "keys": keys, "count": len(keys)})
 
 
+@app.get("/public")
+def list_public_files():
+    files = []
+    for root, _, file_names in os.walk(LOCAL_PUBLIC_DIR):
+        for file_name in file_names:
+            full_path = os.path.join(root, file_name)
+            relative_path = os.path.relpath(full_path, LOCAL_PUBLIC_DIR).replace("\\", "/")
+            files.append(relative_path)
+
+    files.sort()
+    logger.info("public_files_list edge=%s count=%s", EDGE_NAME, len(files))
+    return jsonify({"edge": EDGE_NAME, "region": EDGE_REGION, "count": len(files), "files": files})
+
+
+@app.post("/public/sync")
+def sync_public_files():
+    copied_files = copy_origin_public_to_edge_public()
+    return jsonify({"edge": EDGE_NAME, "region": EDGE_REGION, "copied_files": copied_files})
+
+
+@app.get("/public/<path:filename>")
+def serve_public_file(filename: str):
+    requested_path = os.path.abspath(os.path.join(LOCAL_PUBLIC_DIR, filename))
+    public_root = os.path.abspath(LOCAL_PUBLIC_DIR)
+
+    if not requested_path.startswith(public_root + os.sep):
+        return jsonify({"error": "invalid_path"}), 400
+
+    if os.path.exists(requested_path):
+        response = send_from_directory(LOCAL_PUBLIC_DIR, filename)
+        response.headers["X-Edge-Cache"] = "HIT"
+        response.headers["X-Edge-Name"] = EDGE_NAME
+        return response
+
+    if fetch_public_file_from_origin(filename):
+        response = send_from_directory(LOCAL_PUBLIC_DIR, filename)
+        response.headers["X-Edge-Cache"] = "MISS"
+        response.headers["X-Edge-Name"] = EDGE_NAME
+        return response
+
+    return jsonify({"error": f"file '{filename}' not found"}), 404
+
+
 @app.get("/content/<key>")
 def get_content(key: str):
     now = time.time()
@@ -110,6 +231,13 @@ def get_content(key: str):
     if cached:
         age_seconds = now - cached["cached_at"]
         if age_seconds < CACHE_TTL_SECONDS:
+            logger.info(
+                "served_request key=%s source=edge_cache edge=%s host=%s client=%s",
+                key,
+                EDGE_NAME,
+                EDGE_HOSTNAME,
+                request.remote_addr,
+            )
             logger.info(
                 "cache_hit key=%s edge=%s age_seconds=%.2f ttl_seconds=%s",
                 key,
@@ -126,6 +254,7 @@ def get_content(key: str):
                     "source": "edge_cache",
                     "edge": EDGE_NAME,
                     "region": EDGE_REGION,
+                    "edge_hostname": EDGE_HOSTNAME,
                     "cache_hit": True,
                     "cache_age_seconds": round(age_seconds, 3),
                     "cache_ttl_seconds": CACHE_TTL_SECONDS,
@@ -168,6 +297,14 @@ def get_content(key: str):
         }
 
     logger.info("cache_store key=%s edge=%s version=%s", key, EDGE_NAME, payload["version"])
+    logger.info(
+        "served_request key=%s source=origin_via_edge edge=%s host=%s client=%s origin=%s",
+        key,
+        EDGE_NAME,
+        EDGE_HOSTNAME,
+        request.remote_addr,
+        used_origin,
+    )
 
     return jsonify(
         {
@@ -177,6 +314,7 @@ def get_content(key: str):
             "source": "origin_via_edge",
             "edge": EDGE_NAME,
             "region": EDGE_REGION,
+            "edge_hostname": EDGE_HOSTNAME,
             "cache_hit": False,
             "cache_ttl_seconds": CACHE_TTL_SECONDS,
             "origin_used": used_origin,
@@ -205,4 +343,4 @@ def purge_key(key: str):
 
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000, debug=False)
+    app.run(host="0.0.0.0", port=SERVICE_PORT, debug=False)
