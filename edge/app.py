@@ -18,7 +18,7 @@ logger = logging.getLogger("edge")
 
 EDGE_NAME = os.getenv("EDGE_NAME", "edge_friend")
 EDGE_REGION = os.getenv("EDGE_REGION", "asia")
-ORIGIN_URL = os.getenv("ORIGIN_URL", "http://10.159.173.150:5000")
+ORIGIN_URL = os.getenv("ORIGIN_URL", "http://127.0.0.1:5000")
 ORIGIN_URLS = [u.strip() for u in os.getenv("ORIGIN_URLS", "").split(",") if u.strip()]
 if not ORIGIN_URLS:
     ORIGIN_URLS = [ORIGIN_URL]
@@ -208,13 +208,13 @@ def serve_public_file(filename: str):
         return jsonify({"error": "invalid_path"}), 400
 
     if os.path.exists(requested_path):
-        response = send_from_directory(LOCAL_PUBLIC_DIR, filename)
+        response = send_from_directory(LOCAL_PUBLIC_DIR, filename, conditional=True)
         response.headers["X-Edge-Cache"] = "HIT"
         response.headers["X-Edge-Name"] = EDGE_NAME
         return response
 
     if fetch_public_file_from_origin(filename):
-        response = send_from_directory(LOCAL_PUBLIC_DIR, filename)
+        response = send_from_directory(LOCAL_PUBLIC_DIR, filename, conditional=True)
         response.headers["X-Edge-Cache"] = "MISS"
         response.headers["X-Edge-Name"] = EDGE_NAME
         return response

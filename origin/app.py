@@ -107,7 +107,7 @@ def serve_public_file(filename: str):
         return jsonify({"error": f"file '{filename}' not found"}), 404
 
     logger.info("serve_public_file file=%s", filename)
-    return send_from_directory(PUBLIC_DIR, filename)
+    return send_from_directory(PUBLIC_DIR, filename, conditional=True)
 
 
 @app.get("/content/<key>")

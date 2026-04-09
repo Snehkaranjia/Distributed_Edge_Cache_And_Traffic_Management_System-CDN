@@ -178,6 +178,26 @@
       grid-column: 1 / -1;
     }
 
+    .media-panel {
+      margin-top: 12px;
+      border: 1px solid rgba(148, 163, 184, 0.18);
+      border-radius: 10px;
+      padding: 10px;
+      background: rgba(2, 6, 23, 0.55);
+    }
+
+    .media-title {
+      margin: 0 0 8px;
+      font-size: 0.92rem;
+      color: var(--muted);
+    }
+
+    .media-meta {
+      margin-top: 8px;
+      font-size: 0.82rem;
+      color: var(--muted);
+    }
+
     pre {
       margin: 0;
       max-height: 340px;
@@ -262,8 +282,10 @@
         <pre id="output">{
   "message": "Waiting for request"
 }</pre>
-        <div style="margin-top: 12px;">
+        <div class="media-panel">
+          <p class="media-title">Featured Video Showcase</p>
           <video id="videoPlayer" controls style="width: 100%; border-radius: 10px; border: 1px solid rgba(148, 163, 184, 0.18); background: #000;" preload="metadata"></video>
+          <div class="media-meta" id="mediaMeta">No video loaded yet.</div>
         </div>
       </section>
     </div>
@@ -272,6 +294,8 @@
   <script>
     const output = document.getElementById("output");
     const statusEl = document.getElementById("status");
+    const mediaMeta = document.getElementById("mediaMeta");
+    const videoPlayer = document.getElementById("videoPlayer");
 
     function setStatus(message, isError) {
       statusEl.textContent = message;
@@ -330,18 +354,28 @@
     function loadVideo() {
       const mediaFile = document.getElementById("mediaFile").value.trim();
       const region = document.getElementById("region").value;
-      const player = document.getElementById("videoPlayer");
       if (!mediaFile) {
         setStatus("Please enter media file name.", true);
         return;
       }
 
       const url = `/stream/${encodeURIComponent(mediaFile)}?region=${encodeURIComponent(region)}`;
-      player.src = url;
-      player.load();
+      videoPlayer.src = url;
+      videoPlayer.load();
+      mediaMeta.textContent = `Showing: ${mediaFile} | Routed by region: ${region}`;
       setStatus("Video source loaded. Press play to start.", false);
       render({ media_url: url, note: "Video is served via selected edge and cached there on first request." });
     }
+
+    videoPlayer.addEventListener("canplay", () => {
+      setStatus("Video is ready to play.", false);
+    });
+
+    videoPlayer.addEventListener("error", () => {
+      const currentSrc = videoPlayer.currentSrc || "unknown";
+      setStatus("Video playback failed. Check file name and sync status.", true);
+      render({ error: "video_playback_failed", source: currentSrc });
+    });
 
     document.getElementById("fetchBtn").addEventListener("click", fetchContent);
     document.getElementById("edgeBtn").addEventListener("click", checkEdges);

@@ -5,7 +5,7 @@ import threading
 import uuid
 
 import requests
-from flask import Flask, Response, jsonify, render_template, request, send_from_directory
+from flask import Flask, Response, jsonify, render_template, request, send_from_directory, stream_with_context
 
 app = Flask(__name__)
 
@@ -25,7 +25,7 @@ ORIGIN_PUBLIC_DIR = os.path.abspath(os.path.join(BASE_DIR, "..", "origin", "publ
 _edge_env = {
     "us": os.getenv("EDGE_US_URL"),
     "eu": os.getenv("EDGE_EU_URL"),
-    "asia": os.getenv("EDGE_ASIA_URL", "https://51jhsbxw-5000.inc1.devtunnels.ms/"),
+    "asia": os.getenv("EDGE_ASIA_URL"),
 }
 
 # If any EDGE_*_URL is explicitly provided, only use the provided non-empty values.
@@ -262,7 +262,7 @@ def serve_local_public_file(filename: str):
     if not os.path.exists(requested_path):
         return jsonify({"error": f"file '{filename}' not found"}), 404
 
-    return send_from_directory(LOCAL_PUBLIC_DIR, filename)
+    return send_from_directory(LOCAL_PUBLIC_DIR, filename, conditional=True)
 
 
 @app.get("/stream/<path:filename>")
@@ -272,20 +272,60 @@ def stream_media(filename: str):
     if not edge_url:
         return jsonify({"error": "no_healthy_edges"}), 503
 
+    upstream_headers = {}
+    incoming_range = request.headers.get("Range")
+    if incoming_range:
+        upstream_headers["Range"] = incoming_range
+
     try:
         upstream_response = requests.get(
             f"{edge_url}/public/{filename}",
-            timeout=REQUEST_TIMEOUT_SECONDS + 10,
+            headers=upstream_headers,
+            stream=True,
+            timeout=(REQUEST_TIMEOUT_SECONDS, 60),
         )
     except requests.RequestException as exc:
         logger.exception("stream_media_failed file=%s error=%s", filename, exc)
         return jsonify({"error": "edge_request_failed", "details": str(exc)}), 502
 
-    if upstream_response.status_code != 200:
-        return jsonify({"error": "media_not_found", "status": upstream_response.status_code}), upstream_response.status_code
+    if upstream_response.status_code not in (200, 206):
+        details = {"error": "media_not_found", "status": upstream_response.status_code}
+        try:
+            details = upstream_response.json()
+        except ValueError:
+            pass
+        finally:
+            upstream_response.close()
+        return jsonify(details), upstream_response.status_code
 
-    content_type = upstream_response.headers.get("Content-Type", "application/octet-stream")
-    response = Response(upstream_response.content, status=200, content_type=content_type)
+    passthrough_headers = {}
+    for header_name in [
+        "Content-Type",
+        "Content-Length",
+        "Content-Range",
+        "Accept-Ranges",
+        "Cache-Control",
+        "ETag",
+        "Last-Modified",
+    ]:
+        header_value = upstream_response.headers.get(header_name)
+        if header_value:
+            passthrough_headers[header_name] = header_value
+
+    def generate_chunks():
+        try:
+            for chunk in upstream_response.iter_content(chunk_size=64 * 1024):
+                if chunk:
+                    yield chunk
+        finally:
+            upstream_response.close()
+
+    response = Response(
+        stream_with_context(generate_chunks()),
+        status=upstream_response.status_code,
+        headers=passthrough_headers,
+        direct_passthrough=True,
+    )
     response.headers["X-Routed-Edge-Region"] = chosen_region
     response.headers["X-Routed-Edge-Url"] = edge_url
     response.headers["X-Edge-Cache"] = upstream_response.headers.get("X-Edge-Cache", "unknown")

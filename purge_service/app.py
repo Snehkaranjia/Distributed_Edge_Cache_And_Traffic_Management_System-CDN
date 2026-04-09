@@ -18,7 +18,7 @@ SERVICE_PORT = int(os.getenv("PORT", "5005"))
 _edge_env = {
     "us": os.getenv("EDGE_US_URL"),
     "eu": os.getenv("EDGE_EU_URL"),
-    "asia": os.getenv("EDGE_ASIA_URL", "http://10.159.173.200:5000"),
+    "asia": os.getenv("EDGE_ASIA_URL"),
 }
 
 # If any EDGE_*_URL is explicitly provided, only use the provided non-empty values.
