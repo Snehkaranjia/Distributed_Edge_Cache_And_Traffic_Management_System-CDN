@@ -239,6 +239,9 @@
         <label for="key">Content Key</label>
         <input id="key" value="index" placeholder="index">
 
+        <label for="mediaFile">Media File (from public folder)</label>
+        <input id="mediaFile" value="sample.mp4" placeholder="sample.mp4">
+
         <label for="region">Client Region</label>
         <select id="region">
           <option value="asia">asia</option>
@@ -249,6 +252,7 @@
         <div class="actions">
           <button class="btn-main" id="fetchBtn">Fetch From CDN</button>
           <button class="btn-alt" id="edgeBtn">Check Edge Health</button>
+          <button class="btn-main" id="videoBtn">Load Video</button>
         </div>
         <div class="status" id="status">Ready.</div>
       </section>
@@ -258,6 +262,9 @@
         <pre id="output">{
   "message": "Waiting for request"
 }</pre>
+        <div style="margin-top: 12px;">
+          <video id="videoPlayer" controls style="width: 100%; border-radius: 10px; border: 1px solid rgba(148, 163, 184, 0.18); background: #000;" preload="metadata"></video>
+        </div>
       </section>
     </div>
   </div>
@@ -320,8 +327,25 @@
       }
     }
 
+    function loadVideo() {
+      const mediaFile = document.getElementById("mediaFile").value.trim();
+      const region = document.getElementById("region").value;
+      const player = document.getElementById("videoPlayer");
+      if (!mediaFile) {
+        setStatus("Please enter media file name.", true);
+        return;
+      }
+
+      const url = `/stream/${encodeURIComponent(mediaFile)}?region=${encodeURIComponent(region)}`;
+      player.src = url;
+      player.load();
+      setStatus("Video source loaded. Press play to start.", false);
+      render({ media_url: url, note: "Video is served via selected edge and cached there on first request." });
+    }
+
     document.getElementById("fetchBtn").addEventListener("click", fetchContent);
     document.getElementById("edgeBtn").addEventListener("click", checkEdges);
+    document.getElementById("videoBtn").addEventListener("click", loadVideo);
   </script>
 </body>
 </html>
